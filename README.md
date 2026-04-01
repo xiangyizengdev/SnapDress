@@ -30,7 +30,7 @@ Download the latest `.dmg` from [Releases](../../releases), open it, and drag Sn
 ### Build from source
 
 ```bash
-git clone https://github.com/wszxy/SnapDress.git
+git clone https://github.com/xiangyizengdev/SnapDress.git
 cd SnapDress
 bash scripts/bundle.sh
 open /Applications/SnapDress.app
