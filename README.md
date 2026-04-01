@@ -4,6 +4,12 @@ A lightweight macOS screenshot beautifier that lives in your menu bar. Capture a
 
 Think of it as a minimal, open-source alternative to Xnapper / CleanShot X.
 
+## Screenshots
+
+| Editor | Annotation Toolbar |
+|--------|-------------------|
+| ![Editor](screenshots/editor.png) | ![Annotation Toolbar](screenshots/annotation-toolbar.png) |
+
 ## Features
 
 - **Region capture** with global hotkey (default `⌘⇧2`, customizable)
