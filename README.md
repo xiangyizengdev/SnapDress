@@ -6,9 +6,13 @@ Think of it as a minimal, open-source alternative to Xnapper / CleanShot X.
 
 ## Screenshots
 
-| Editor | Annotation Toolbar |
-|--------|-------------------|
-| ![Editor](screenshots/editor.png) | ![Annotation Toolbar](screenshots/annotation-toolbar.png) |
+**Editor**
+
+<img src="screenshots/editor.png" width="720" />
+
+**Annotation Toolbar**
+
+<img src="screenshots/annotation-toolbar.png" width="720" />
 
 ## Features
 
