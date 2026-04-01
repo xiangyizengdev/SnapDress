@@ -1,0 +1,10 @@
+.DS_Store
+.build/
+.swiftpm/
+*.xcuserstate
+log/
+SnapDress.app/
+SnapDress-*.dmg
+.iconset-staging.iconset/
+.dmg-staging/
+.cursor/
