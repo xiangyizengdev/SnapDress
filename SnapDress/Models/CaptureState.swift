@@ -57,6 +57,9 @@ class CaptureState: ObservableObject {
     }
 
     func startCapture() {
+        if case .editing = mode {
+            closeEditor()
+        }
         guard mode == .idle else { return }
         mode = .selecting
         showOverlayWindows()
@@ -220,6 +223,10 @@ class CaptureState: ObservableObject {
 
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
 
+        // Flip to top-left origin for annotation drawing (matches SwiftUI coordinate system)
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+
         let selOriginX = selectionRect.origin.x - screen.frame.origin.x
         let selOriginY = screen.frame.height - selectionRect.maxY + screen.frame.origin.y
 
@@ -320,11 +327,6 @@ class CaptureState: ObservableObject {
         let bpp = image.bitsPerPixel / 8
         let bytesPerRow = image.bytesPerRow
 
-        // CGContext has Y flipped relative to the image data:
-        // ctx.draw() already flipped the image, so we draw blocks in ctx's coordinate system
-        // where (0,0) is bottom-left. But our rect is in top-left coords matching the image data.
-        // We need to flip Y when drawing into the context.
-
         var blockY = y0
         while blockY < y1 {
             let bh = min(blockSize, y1 - blockY)
@@ -350,9 +352,7 @@ class CaptureState: ObservableObject {
                     let g = CGFloat(gSum / count) / 255.0
                     let b = CGFloat(bSum / count) / 255.0
 
-                    // Flip Y for CGContext (bottom-left origin)
-                    let flippedY = imgH - blockY - bh
-                    let fillRect = CGRect(x: blockX, y: flippedY, width: bw, height: bh)
+                    let fillRect = CGRect(x: blockX, y: blockY, width: bw, height: bh)
                     ctx.setFillColor(CGColor(red: r, green: g, blue: b, alpha: 1))
                     ctx.fill([fillRect])
                 }

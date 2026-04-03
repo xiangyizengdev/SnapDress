@@ -60,7 +60,10 @@ class ImageProcessor {
             drawBackground(ctx: ctx, canvasSize: canvasSize, sourceImage: croppedImage, options: options)
         }
 
-        // 2. Draw shadow
+        // 2. Draw rounded screenshot with shadow
+        //    Use a transparency layer so the shadow is generated from the
+        //    composited alpha mask — no separate black fill that could bleed
+        //    through anti-aliased corners.
         let imageRect = CGRect(
             x: options.padding,
             y: options.padding,
@@ -75,20 +78,8 @@ class ImageProcessor {
             blur: options.shadowRadius,
             color: shadowColor
         )
+        ctx.beginTransparencyLayer(auxiliaryInfo: nil)
 
-        let shadowPath = CGPath(
-            roundedRect: imageRect,
-            cornerWidth: options.cornerRadius,
-            cornerHeight: options.cornerRadius,
-            transform: nil
-        )
-        ctx.addPath(shadowPath)
-        ctx.setFillColor(CGColor(gray: 0, alpha: 1))
-        ctx.fillPath()
-        ctx.restoreGState()
-
-        // 3. Draw rounded screenshot
-        ctx.saveGState()
         let clipPath = CGPath(
             roundedRect: imageRect,
             cornerWidth: options.cornerRadius,
@@ -98,6 +89,8 @@ class ImageProcessor {
         ctx.addPath(clipPath)
         ctx.clip()
         ctx.draw(croppedImage, in: imageRect)
+
+        ctx.endTransparencyLayer()
         ctx.restoreGState()
 
         NSGraphicsContext.restoreGraphicsState()
@@ -148,7 +141,13 @@ class ImageProcessor {
         let ciImage = CIImage(cgImage: sourceImage)
         let clamped = ciImage.clampedToExtent()
         let blurred = clamped.applyingGaussianBlur(sigma: 30)
-        let cropped = blurred.cropped(to: ciImage.extent)
+        // Boost brightness and saturation so the frosted effect is visible
+        // even on uniform-color screenshots (e.g. white pages)
+        let enhanced = blurred.applyingFilter("CIColorControls", parameters: [
+            kCIInputBrightnessKey: 0.06,
+            kCIInputSaturationKey: 1.3
+        ])
+        let cropped = enhanced.cropped(to: ciImage.extent)
 
         if let blurredCG = ciContext.createCGImage(cropped, from: ciImage.extent) {
             ctx.saveGState()
