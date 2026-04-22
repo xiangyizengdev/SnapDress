@@ -1,6 +1,6 @@
 import SwiftUI
 
-enum BackgroundStyle: String, CaseIterable, Identifiable {
+enum BackgroundStyle: String, CaseIterable, Identifiable, Codable {
     // Special
     case frostedGlass
     // Solid

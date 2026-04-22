@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct AnnotationOverlay: View {
-    let selectionRect: CGRect
+    @Binding var selectionRect: CGRect
+    let overlayBounds: CGRect
     let screen: NSScreen
     let onConfirm: ([Annotation]) -> Void
     let onCancel: () -> Void
@@ -9,6 +10,10 @@ struct AnnotationOverlay: View {
     @State private var selectedTool: AnnotationTool? = nil
     @State private var annotations: [Annotation] = []
     @State private var currentAnnotation: Annotation? = nil
+    @State private var moveStartRect: CGRect? = nil
+    @State private var moveStartAnnotations: [Annotation]? = nil
+    @State private var isHoveringSelection: Bool = false
+    @FocusState private var isFocused: Bool
 
     var body: some View {
         ZStack {
@@ -27,12 +32,21 @@ struct AnnotationOverlay: View {
             .compositingGroup()
             .allowsHitTesting(false)
 
-            // Selection border (dashed when annotating)
-            Rectangle()
-                .stroke(Color.white.opacity(0.8), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                .frame(width: selectionRect.width, height: selectionRect.height)
-                .position(x: selectionRect.midX, y: selectionRect.midY)
-                .allowsHitTesting(false)
+            // Selection frame with handles + dimension capsule (shared with
+            // the live-drag phase). Gives the selection a proper "screenshot
+            // tool" feel instead of a plain stroke.
+            SelectionFrame(
+                rect: selectionRect,
+                backingScale: screen.backingScaleFactor,
+                overlaySize: overlayBounds.size,
+                showHandles: true,
+                showDimensions: true
+            )
+
+            // Move handle: covers the selection rect and lets the user drag
+            // the whole frame to fine-tune its position. Only active when no
+            // annotation tool is selected, so drawing still takes priority.
+            moveHandle
 
             // Annotation canvas
             annotationCanvas
@@ -41,6 +55,100 @@ struct AnnotationOverlay: View {
             toolbar
                 .position(toolbarPosition)
         }
+        .focusable()
+        .focused($isFocused)
+        .onAppear { isFocused = true }
+        .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow]) { press in
+            let step: CGFloat = press.modifiers.contains(.shift) ? 10 : 1
+            let delta: CGSize
+            switch press.key {
+            case .upArrow: delta = CGSize(width: 0, height: -step)
+            case .downArrow: delta = CGSize(width: 0, height: step)
+            case .leftArrow: delta = CGSize(width: -step, height: 0)
+            case .rightArrow: delta = CGSize(width: step, height: 0)
+            default: return .ignored
+            }
+            nudge(by: delta)
+            return .handled
+        }
+    }
+
+    // MARK: - Move Handle
+
+    @ViewBuilder
+    private var moveHandle: some View {
+        if selectedTool == nil {
+            Rectangle()
+                .fill(Color.clear)
+                .contentShape(Rectangle())
+                .frame(width: selectionRect.width, height: selectionRect.height)
+                .position(x: selectionRect.midX, y: selectionRect.midY)
+                .onHover { hovering in
+                    isHoveringSelection = hovering
+                    if hovering, moveStartRect == nil {
+                        NSCursor.openHand.set()
+                    } else if !hovering, moveStartRect == nil {
+                        NSCursor.arrow.set()
+                    }
+                }
+                .gesture(moveGesture)
+        }
+    }
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                if moveStartRect == nil {
+                    moveStartRect = selectionRect
+                    moveStartAnnotations = annotations
+                    NSCursor.closedHand.set()
+                }
+                guard let startRect = moveStartRect,
+                      let startAnn = moveStartAnnotations else { return }
+
+                var target = startRect.offsetBy(
+                    dx: value.translation.width,
+                    dy: value.translation.height
+                )
+                // Clamp inside overlay bounds.
+                let minX = overlayBounds.minX
+                let maxX = overlayBounds.maxX - target.width
+                let minY = overlayBounds.minY
+                let maxY = overlayBounds.maxY - target.height
+                target.origin.x = min(max(target.origin.x, minX), maxX)
+                target.origin.y = min(max(target.origin.y, minY), maxY)
+                selectionRect = target
+
+                let dx = target.minX - startRect.minX
+                let dy = target.minY - startRect.minY
+                annotations = startAnn.map { shift($0, dx: dx, dy: dy) }
+            }
+            .onEnded { _ in
+                moveStartRect = nil
+                moveStartAnnotations = nil
+                NSCursor.openHand.set()
+            }
+    }
+
+    private func nudge(by delta: CGSize) {
+        var target = selectionRect.offsetBy(dx: delta.width, dy: delta.height)
+        let maxX = overlayBounds.maxX - target.width
+        let maxY = overlayBounds.maxY - target.height
+        target.origin.x = min(max(target.origin.x, overlayBounds.minX), maxX)
+        target.origin.y = min(max(target.origin.y, overlayBounds.minY), maxY)
+        let dx = target.minX - selectionRect.minX
+        let dy = target.minY - selectionRect.minY
+        selectionRect = target
+        annotations = annotations.map { shift($0, dx: dx, dy: dy) }
+    }
+
+    private func shift(_ a: Annotation, dx: CGFloat, dy: CGFloat) -> Annotation {
+        var copy = a
+        copy.startPoint.x += dx
+        copy.startPoint.y += dy
+        copy.endPoint.x += dx
+        copy.endPoint.y += dy
+        return copy
     }
 
     // MARK: - Toolbar Position

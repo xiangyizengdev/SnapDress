@@ -6,7 +6,21 @@ import SwiftUI
 class ImageProcessor {
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
-    func process(image: CGImage, options: BeautifyOptions) -> NSImage {
+    /// Renders the beautified image.
+    ///
+    /// - Parameters:
+    ///   - backingScale: The screen's backingScaleFactor at capture time
+    ///     (typically `2.0` on Retina). When `useRetinaSize` is `true`,
+    ///     the returned NSImage's `size` is reported in *points* (= pixels /
+    ///     scale) so Cocoa, Figma, Sketch, etc. correctly treat it as a
+    ///     HiDPI asset and don't downsample on paste. When `false`, the
+    ///     returned NSImage's size equals its pixel size (legacy 1x).
+    func process(
+        image: CGImage,
+        options: BeautifyOptions,
+        backingScale: CGFloat = 2.0,
+        useRetinaSize: Bool = true
+    ) -> NSImage {
         let imageWidth = CGFloat(image.width) - options.inset * 2
         let imageHeight = CGFloat(image.height) - options.inset * 2
         let canvasWidth = imageWidth + options.padding * 2
@@ -95,9 +109,23 @@ class ImageProcessor {
 
         NSGraphicsContext.restoreGraphicsState()
 
-        let resultImage = NSImage(size: canvasSize)
-        resultImage.addRepresentation(bitmapRep)
-        return resultImage
+        // Tag the bitmap rep with point dimensions so `NSImage.size` ends up in
+        // points and downstream consumers (clipboard, PNG metadata, Figma,
+        // Sketch) recognise this as a Retina asset rather than a 1x image.
+        if useRetinaSize, backingScale > 1 {
+            let pointSize = NSSize(
+                width: canvasWidth / backingScale,
+                height: canvasHeight / backingScale
+            )
+            bitmapRep.size = pointSize
+            let resultImage = NSImage(size: pointSize)
+            resultImage.addRepresentation(bitmapRep)
+            return resultImage
+        } else {
+            let resultImage = NSImage(size: canvasSize)
+            resultImage.addRepresentation(bitmapRep)
+            return resultImage
+        }
     }
 
     // MARK: - Background Drawing

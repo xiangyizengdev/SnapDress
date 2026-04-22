@@ -19,7 +19,10 @@ enum CaptureError: Error, LocalizedError {
 
 class ScreenCaptureService {
 
-    func captureRegion(rect: CGRect, screen: NSScreen) async throws -> CGImage {
+    /// Captures the full contents of the given screen as a CGImage.
+    /// Used to grab a frozen snapshot the user can select/annotate on,
+    /// so the picked region doesn't change while the screen keeps updating.
+    func captureFullScreen(screen: NSScreen) async throws -> CGImage {
         let content: SCShareableContent
         do {
             content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -40,24 +43,33 @@ class ScreenCaptureService {
         config.showsCursor = false
         config.captureResolution = .best
 
-        let fullImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+        return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
+    }
 
-        // Convert rect from AppKit screen coordinates (origin bottom-left)
-        // to CGImage pixel coordinates (origin top-left)
+    /// Crops a pre-captured full-screen snapshot using a selection rect in
+    /// AppKit screen coordinates (origin bottom-left, measured in points).
+    func cropSnapshot(_ snapshot: CGImage, selection: CGRect, screen: NSScreen) -> CGImage? {
+        let scale = screen.backingScaleFactor
         let screenFrame = screen.frame
-        let localX = rect.origin.x - screenFrame.origin.x
-        let localY = screenFrame.height - (rect.maxY - screenFrame.origin.y)
+        let localX = selection.origin.x - screenFrame.origin.x
+        let localY = screenFrame.height - (selection.maxY - screenFrame.origin.y)
         let pixelRect = CGRect(
             x: localX * scale,
             y: localY * scale,
-            width: rect.width * scale,
-            height: rect.height * scale
+            width: selection.width * scale,
+            height: selection.height * scale
         )
+        return snapshot.cropping(to: pixelRect)
+    }
 
-        guard let cropped = fullImage.cropping(to: pixelRect) else {
+    /// Live-capture path: grabs the current screen and crops to the selection.
+    /// Used when "freeze on capture" is disabled — the caller should make sure
+    /// the overlay window is already hidden so it's not baked into the image.
+    func captureRegion(rect: CGRect, screen: NSScreen) async throws -> CGImage {
+        let snapshot = try await captureFullScreen(screen: screen)
+        guard let cropped = cropSnapshot(snapshot, selection: rect, screen: screen) else {
             throw CaptureError.cropFailed
         }
-
         return cropped
     }
 }

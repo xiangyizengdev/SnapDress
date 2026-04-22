@@ -22,8 +22,12 @@ struct WindowManager {
         return window
     }
 
-    static func createFloatingPreviewWindow(image: NSImage, onTap: @escaping () -> Void) -> NSWindow {
-        let view = FloatingPreviewView(image: image, onTap: onTap)
+    static func createFloatingPreviewWindow(
+        image: NSImage,
+        onTap: @escaping () -> Void,
+        onDismiss: @escaping () -> Void
+    ) -> NSWindow {
+        let view = FloatingPreviewView(image: image, onTap: onTap, onDismiss: onDismiss)
         let hostingView = NSHostingView(rootView: view)
         hostingView.setFrameSize(hostingView.fittingSize)
 
@@ -120,4 +124,14 @@ class OverlayWindow: NSWindow {
             super.keyDown(with: event)
         }
     }
+}
+
+// When SnapDress (an LSUIElement agent app) is not the active app,
+// the first click on a newly shown overlay is treated as an
+// "activating click" by macOS and is swallowed unless the hit-tested
+// view accepts first mouse. Returning true here ensures the very first
+// mouseDown is delivered to SwiftUI's DragGesture so the user never
+// has to click twice to start selecting.
+class OverlayHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 }

@@ -11,7 +11,7 @@ struct SnapDressApp: App {
             MenuBarView()
                 .environmentObject(captureState)
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
     }
 }
 
@@ -35,6 +35,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             return
         }
+
+        // Default preference values. Registered (not written), so the user's
+        // explicit choice always wins over these.
+        UserDefaults.standard.register(defaults: [
+            "freezeOnCapture": true,
+        ])
 
         preAuthorizeScreenCapture()
 
@@ -69,11 +75,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             let window = NSWindow(
                 contentRect: NSRect(origin: .zero, size: hostingView.fittingSize),
-                styleMask: [.titled, .closable],
+                styleMask: [.titled, .closable, .fullSizeContentView],
                 backing: .buffered,
                 defer: false
             )
-            window.title = "SnapDress Preferences"
+            // Fuse the titlebar with the content so the hero section can bleed
+            // all the way to the top — traffic lights still sit above it.
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.isMovableByWindowBackground = true
+            window.title = "SnapDress"
             window.isReleasedWhenClosed = false
             window.contentView = hostingView
             window.center()

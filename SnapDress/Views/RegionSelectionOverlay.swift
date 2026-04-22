@@ -7,6 +7,7 @@ struct RegionSelectionOverlay: View {
     @State private var dragStart: CGPoint?
     @State private var dragCurrent: CGPoint?
     @State private var finalViewRect: CGRect? = nil
+    @State private var hoverPoint: CGPoint? = nil
 
     private var selectionRect: CGRect? {
         guard let start = dragStart, let current = dragCurrent else { return nil }
@@ -22,13 +23,36 @@ struct RegionSelectionOverlay: View {
         captureState.mode == .annotating
     }
 
+    private var snapshot: CGImage? {
+        captureState.screenSnapshots[screen.displayID]
+    }
+
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                if isAnnotating, let rect = finalViewRect {
-                    // Annotation mode: show annotation overlay with toolbar
+                // Frozen screen snapshot as background. In frozen mode this
+                // makes the selection area show a static image instead of
+                // live pixels; in live mode it's absent and the overlay stays
+                // transparent as before.
+                if let snap = snapshot {
+                    Image(decorative: snap, scale: screen.backingScaleFactor)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                        .clipped()
+                        .allowsHitTesting(false)
+                }
+
+                if isAnnotating, finalViewRect != nil {
+                    // Annotation mode: show annotation overlay with toolbar.
+                    // Binding lets the overlay fine-tune the rect (drag to move,
+                    // arrow keys to nudge) and propagate it back here.
                     AnnotationOverlay(
-                        selectionRect: rect,
+                        selectionRect: Binding(
+                            get: { finalViewRect ?? .zero },
+                            set: { finalViewRect = $0 }
+                        ),
+                        overlayBounds: CGRect(origin: .zero, size: geometry.size),
                         screen: screen,
                         onConfirm: { annotations in
                             confirmWithAnnotations(annotations, viewSize: geometry.size)
@@ -64,21 +88,40 @@ struct RegionSelectionOverlay: View {
             .compositingGroup()
 
             if let rect = selectionRect {
-                Rectangle()
-                    .stroke(Color.white, lineWidth: 1.5)
-                    .frame(width: rect.width, height: rect.height)
-                    .position(x: rect.midX, y: rect.midY)
+                // During the active drag we skip handles (the rect is
+                // still changing shape). They show up once the user lets
+                // go and we transition into annotation mode.
+                SelectionFrame(
+                    rect: rect,
+                    backingScale: screen.backingScaleFactor,
+                    overlaySize: geometry.size,
+                    showHandles: false,
+                    showDimensions: true
+                )
+            }
 
-                let w = Int(rect.width * screen.backingScaleFactor)
-                let h = Int(rect.height * screen.backingScaleFactor)
-                Text("\(w) × \(h)")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(Color.black.opacity(0.7))
-                    .cornerRadius(4)
-                    .position(x: rect.midX, y: rect.maxY + 20)
+            // Pixel magnifier (frozen mode only — we need a static snapshot
+            // to crop from). Follows the cursor, flips to the opposite corner
+            // when it would clip a screen edge.
+            if let snap = snapshot, let pt = hoverPoint {
+                MagnifierView(
+                    cursorPoint: pt,
+                    snapshot: snap,
+                    backingScale: screen.backingScaleFactor,
+                    overlaySize: geometry.size,
+                    dimensionText: selectionRect.map { r in
+                        let scale = screen.backingScaleFactor
+                        return "\(Int(r.width * scale)) × \(Int(r.height * scale))"
+                    }
+                )
+            }
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                hoverPoint = location
+            case .ended:
+                hoverPoint = nil
             }
         }
         .gesture(
@@ -88,6 +131,7 @@ struct RegionSelectionOverlay: View {
                         dragStart = value.startLocation
                     }
                     dragCurrent = value.location
+                    hoverPoint = value.location
                 }
                 .onEnded { value in
                     dragCurrent = value.location
@@ -128,8 +172,23 @@ struct RegionSelectionOverlay: View {
     // MARK: - Annotation → Capture
 
     private func confirmWithAnnotations(_ annotations: [Annotation], viewSize: CGSize) {
+        // The user may have dragged / nudged the rect while in annotation mode,
+        // so recompute the screen-space rect from the current view rect before
+        // committing to the capture pipeline.
+        let rect = finalViewRect ?? .zero
+        let screenFrame = screen.frame
+        let updatedScreenRect = CGRect(
+            x: screenFrame.origin.x + rect.origin.x,
+            y: screenFrame.origin.y + (viewSize.height - rect.maxY),
+            width: rect.width,
+            height: rect.height
+        )
+
         Task { @MainActor in
-            captureState.confirmAnnotation(annotations: annotations)
+            captureState.confirmAnnotation(
+                annotations: annotations,
+                updatedScreenRect: updatedScreenRect
+            )
         }
     }
 }
