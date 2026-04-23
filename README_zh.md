@@ -79,7 +79,7 @@
 
 ### DMG 安装（推荐）
 
-1. 从 [Releases](https://github.com/xiangyizengdev/SnapDress/releases/latest) 下载最新的 `SnapDress-1.1.0.dmg`
+1. 从 [Releases](https://github.com/xiangyizengdev/SnapDress/releases/latest) 下载最新的 `SnapDress-1.2.0.dmg`
 2. 打开 DMG，把 `SnapDress` 拖到 `Applications`
 3. 启动 App，首次运行时在 **系统设置 → 隐私与安全性 → 屏幕录制** 授予权限
 

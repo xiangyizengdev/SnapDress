@@ -79,7 +79,7 @@ Most screenshot tools stop at "the shot". SnapDress polishes it in a single keys
 
 ### From DMG (recommended)
 
-1. Download the latest [`SnapDress-1.1.0.dmg`](https://github.com/xiangyizengdev/SnapDress/releases/latest)
+1. Download the latest [`SnapDress-1.2.0.dmg`](https://github.com/xiangyizengdev/SnapDress/releases/latest)
 2. Open the DMG and drag `SnapDress` to `Applications`
 3. Launch and grant Screen Recording permission in **System Settings → Privacy & Security → Screen Recording**
 
