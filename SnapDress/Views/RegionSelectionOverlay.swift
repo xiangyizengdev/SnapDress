@@ -47,6 +47,9 @@ struct RegionSelectionOverlay: View {
                     // Annotation mode: show annotation overlay with toolbar.
                     // Binding lets the overlay fine-tune the rect (drag to move,
                     // arrow keys to nudge) and propagate it back here.
+                    // The frozen snapshot is passed through so mosaic/blur
+                    // tools can show the actual pixellated/blurred content
+                    // (WYSIWYG) instead of an opaque placeholder.
                     AnnotationOverlay(
                         selectionRect: Binding(
                             get: { finalViewRect ?? .zero },
@@ -54,6 +57,7 @@ struct RegionSelectionOverlay: View {
                         ),
                         overlayBounds: CGRect(origin: .zero, size: geometry.size),
                         screen: screen,
+                        snapshot: snapshot,
                         onConfirm: { annotations in
                             confirmWithAnnotations(annotations, viewSize: geometry.size)
                         },

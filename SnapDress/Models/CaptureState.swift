@@ -1,6 +1,8 @@
 import SwiftUI
 import ScreenCaptureKit
 import KeyboardShortcuts
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 enum AppMode: Equatable {
     case idle
@@ -62,6 +64,7 @@ class CaptureState: ObservableObject {
 
     private let screenCaptureService = ScreenCaptureService()
     private let imageProcessor = ImageProcessor()
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
     private var overlayWindows: [NSWindow] = []
     private var editorWindow: EditorWindow?
     private var editorWindowDelegate: EditorWindowDelegateHelper?
@@ -311,6 +314,14 @@ class CaptureState: ObservableObject {
     /// Renders annotations onto the captured CGImage.
     /// Annotations use SwiftUI view coordinates (top-left origin, points),
     /// which must be converted to pixel coordinates relative to the image.
+    ///
+    /// Render order:
+    /// 1. Original screenshot (in CG y-up coords).
+    /// 2. Mosaic / blur effects (Core Image filters), drawn while the
+    ///    context is still y-up so we can composite cropped CGImages.
+    /// 3. Vector strokes (rect / ellipse / arrow), after flipping the
+    ///    context to a y-down (top-left origin) coordinate system that
+    ///    matches the SwiftUI annotation points.
     private func renderAnnotations(_ annotations: [Annotation], onto image: CGImage, selectionRect: CGRect, screen: NSScreen) -> CGImage {
         let scale = screen.backingScaleFactor
         let w = image.width
@@ -326,146 +337,176 @@ class CaptureState: ObservableObject {
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
         ) else { return image }
 
+        // 1. Base screenshot
         ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
-
-        // Flip to top-left origin for annotation drawing (matches SwiftUI coordinate system)
-        ctx.translateBy(x: 0, y: CGFloat(h))
-        ctx.scaleBy(x: 1, y: -1)
 
         let selOriginX = selectionRect.origin.x - screen.frame.origin.x
         let selOriginY = screen.frame.height - selectionRect.maxY + screen.frame.origin.y
 
-        for annotation in annotations {
-            let startX = (annotation.startPoint.x - selOriginX) * scale
-            let startY = (annotation.startPoint.y - selOriginY) * scale
-            let endX = (annotation.endPoint.x - selOriginX) * scale
-            let endY = (annotation.endPoint.y - selOriginY) * scale
+        // Convert one annotation's view-points endpoints into the image's
+        // top-left-origin pixel rect. Used for both effect cropping and
+        // vector path geometry.
+        func imagePixelRect(for ann: Annotation) -> CGRect {
+            let sx = (ann.startPoint.x - selOriginX) * scale
+            let sy = (ann.startPoint.y - selOriginY) * scale
+            let ex = (ann.endPoint.x - selOriginX) * scale
+            let ey = (ann.endPoint.y - selOriginY) * scale
+            return CGRect(
+                x: min(sx, ex),
+                y: min(sy, ey),
+                width: abs(ex - sx),
+                height: abs(ey - sy)
+            )
+        }
 
-            switch annotation.tool {
+        // 2. Effect tools (mosaic / blur) — y-up coordinate composite.
+        for ann in annotations where ann.tool == .mosaic || ann.tool == .blur {
+            let rect = imagePixelRect(for: ann).integral
+            let clamped = rect.intersection(CGRect(x: 0, y: 0, width: w, height: h))
+            guard !clamped.isEmpty,
+                  let cropped = image.cropping(to: clamped) else { continue }
+
+            let effected: CGImage?
+            switch ann.tool {
             case .mosaic:
-                let mosaicRect = CGRect(
-                    x: min(startX, endX),
-                    y: min(startY, endY),
-                    width: abs(endX - startX),
-                    height: abs(endY - startY)
+                effected = pixellate(cropped, blockSize: max(2, ann.blockSize * scale))
+            case .blur:
+                effected = gaussianBlur(cropped, sigma: max(2, ann.blurRadius * scale))
+            default:
+                effected = nil
+            }
+
+            guard let effected else { continue }
+            let yUpRect = CGRect(
+                x: clamped.minX,
+                y: CGFloat(h) - clamped.maxY,
+                width: clamped.width,
+                height: clamped.height
+            )
+            ctx.draw(effected, in: yUpRect)
+        }
+
+        // 3. Vector strokes — flip to y-down (matches SwiftUI coords).
+        ctx.translateBy(x: 0, y: CGFloat(h))
+        ctx.scaleBy(x: 1, y: -1)
+
+        for ann in annotations where ann.tool.isVector {
+            let sx = (ann.startPoint.x - selOriginX) * scale
+            let sy = (ann.startPoint.y - selOriginY) * scale
+            let ex = (ann.endPoint.x - selOriginX) * scale
+            let ey = (ann.endPoint.y - selOriginY) * scale
+            let lineWidth = ann.lineWidth * scale
+
+            ctx.setStrokeColor(ann.color.cgColor)
+            ctx.setFillColor(ann.color.cgColor)
+            ctx.setLineWidth(lineWidth)
+            ctx.setLineCap(.round)
+            ctx.setLineJoin(.round)
+
+            switch ann.tool {
+            case .ellipse:
+                let rect = CGRect(
+                    x: min(sx, ex), y: min(sy, ey),
+                    width: abs(ex - sx), height: abs(ey - sy)
                 )
-                renderMosaic(ctx: ctx, image: image, rect: mosaicRect)
+                ctx.strokeEllipse(in: rect)
+
+            case .rectangle:
+                let rect = CGRect(
+                    x: min(sx, ex), y: min(sy, ey),
+                    width: abs(ex - sx), height: abs(ey - sy)
+                )
+                ctx.stroke(rect)
+
+            case .arrow:
+                drawSolidArrow(
+                    ctx: ctx,
+                    from: CGPoint(x: sx, y: sy),
+                    to: CGPoint(x: ex, y: ey),
+                    bodyWidth: lineWidth,
+                    scale: scale
+                )
 
             default:
-                ctx.setStrokeColor(annotation.color.cgColor)
-                ctx.setLineWidth(annotation.lineWidth * scale)
-                ctx.setLineCap(.round)
-                ctx.setLineJoin(.round)
-
-                switch annotation.tool {
-                case .ellipse:
-                    let rect = CGRect(
-                        x: min(startX, endX),
-                        y: min(startY, endY),
-                        width: abs(endX - startX),
-                        height: abs(endY - startY)
-                    )
-                    ctx.strokeEllipse(in: rect)
-
-                case .rectangle:
-                    let rect = CGRect(
-                        x: min(startX, endX),
-                        y: min(startY, endY),
-                        width: abs(endX - startX),
-                        height: abs(endY - startY)
-                    )
-                    ctx.stroke(rect)
-
-                case .arrow:
-                    ctx.beginPath()
-                    ctx.move(to: CGPoint(x: startX, y: startY))
-                    ctx.addLine(to: CGPoint(x: endX, y: endY))
-                    ctx.strokePath()
-
-                    let angle = atan2(endY - startY, endX - startX)
-                    let headLength: CGFloat = 12 * scale
-                    let headAngle: CGFloat = .pi / 6
-
-                    let left = CGPoint(
-                        x: endX - headLength * cos(angle - headAngle),
-                        y: endY - headLength * sin(angle - headAngle)
-                    )
-                    let right = CGPoint(
-                        x: endX - headLength * cos(angle + headAngle),
-                        y: endY - headLength * sin(angle + headAngle)
-                    )
-
-                    ctx.beginPath()
-                    ctx.move(to: left)
-                    ctx.addLine(to: CGPoint(x: endX, y: endY))
-                    ctx.addLine(to: right)
-                    ctx.strokePath()
-
-                default:
-                    break
-                }
+                break
             }
         }
 
         return ctx.makeImage() ?? image
     }
 
-    /// Pixelates a rectangular region of the image by sampling block averages.
-    private func renderMosaic(ctx: CGContext, image: CGImage, rect: CGRect) {
-        let blockSize = 10
-        let imgW = image.width
-        let imgH = image.height
+    // MARK: - Effect Filters
 
-        // Clamp rect to image bounds
-        let x0 = max(0, Int(rect.minX))
-        let y0 = max(0, Int(rect.minY))
-        let x1 = min(imgW, Int(rect.maxX))
-        let y1 = min(imgH, Int(rect.maxY))
+    /// Mosaic effect using CIPixellate (GPU-accelerated). `blockSize` is in
+    /// source pixels.
+    private func pixellate(_ image: CGImage, blockSize: CGFloat) -> CGImage? {
+        let ci = CIImage(cgImage: image)
+        let filter = CIFilter.pixellate()
+        filter.inputImage = ci
+        filter.scale = Float(blockSize)
+        filter.center = CGPoint(x: ci.extent.midX, y: ci.extent.midY)
+        guard let out = filter.outputImage?.cropped(to: ci.extent) else { return nil }
+        return ciContext.createCGImage(out, from: ci.extent)
+    }
 
-        guard x1 > x0, y1 > y0 else { return }
+    /// Gaussian blur via Core Image. `sigma` is in source pixels.
+    /// `clampedToExtent()` keeps edges from going transparent.
+    private func gaussianBlur(_ image: CGImage, sigma: CGFloat) -> CGImage? {
+        let ci = CIImage(cgImage: image)
+        let filter = CIFilter.gaussianBlur()
+        filter.inputImage = ci.clampedToExtent()
+        filter.radius = Float(sigma)
+        guard let out = filter.outputImage?.cropped(to: ci.extent) else { return nil }
+        return ciContext.createCGImage(out, from: ci.extent)
+    }
 
-        // Get pixel data from the original image
-        guard let dataProvider = image.dataProvider,
-              let data = dataProvider.data,
-              let ptr = CFDataGetBytePtr(data) else { return }
+    /// Draw a closed-polygon arrow (body + filled triangle head) into the
+    /// current ctx (assumed to be in y-down / top-left coordinates). Geometry
+    /// matches `SolidArrowShape` so what the user sees in the overlay is
+    /// what gets baked into the screenshot.
+    private func drawSolidArrow(
+        ctx: CGContext,
+        from: CGPoint,
+        to: CGPoint,
+        bodyWidth: CGFloat,
+        scale: CGFloat
+    ) {
+        let dx = to.x - from.x
+        let dy = to.y - from.y
+        let len = hypot(dx, dy)
+        guard len > 0.5 else { return }
 
-        let bpp = image.bitsPerPixel / 8
-        let bytesPerRow = image.bytesPerRow
+        let angle = atan2(dy, dx)
+        let perp = angle + .pi / 2
+        let cosP = cos(perp), sinP = sin(perp)
 
-        var blockY = y0
-        while blockY < y1 {
-            let bh = min(blockSize, y1 - blockY)
-            var blockX = x0
-            while blockX < x1 {
-                let bw = min(blockSize, x1 - blockX)
+        let headLen = min(len * 0.65, bodyWidth * 4.5)
+        let headHalfWidth = max(bodyWidth * 1.7, bodyWidth + 3 * scale)
+        let bodyHalf = bodyWidth / 2
+        let bodyEndRatio = max(0, 1 - headLen / len)
+        let bodyEnd = CGPoint(
+            x: from.x + dx * bodyEndRatio,
+            y: from.y + dy * bodyEndRatio
+        )
 
-                // Sample average color from original image data
-                var rSum: UInt64 = 0, gSum: UInt64 = 0, bSum: UInt64 = 0
-                var count: UInt64 = 0
-                for py in blockY..<(blockY + bh) {
-                    for px in blockX..<(blockX + bw) {
-                        let offset = py * bytesPerRow + px * bpp
-                        rSum += UInt64(ptr[offset])
-                        gSum += UInt64(ptr[offset + 1])
-                        bSum += UInt64(ptr[offset + 2])
-                        count += 1
-                    }
-                }
+        let p1 = CGPoint(x: from.x + bodyHalf * cosP, y: from.y + bodyHalf * sinP)
+        let p2 = CGPoint(x: from.x - bodyHalf * cosP, y: from.y - bodyHalf * sinP)
+        let p3 = CGPoint(x: bodyEnd.x - bodyHalf * cosP, y: bodyEnd.y - bodyHalf * sinP)
+        let p4 = CGPoint(x: bodyEnd.x - headHalfWidth * cosP, y: bodyEnd.y - headHalfWidth * sinP)
+        let p5 = to
+        let p6 = CGPoint(x: bodyEnd.x + headHalfWidth * cosP, y: bodyEnd.y + headHalfWidth * sinP)
+        let p7 = CGPoint(x: bodyEnd.x + bodyHalf * cosP, y: bodyEnd.y + bodyHalf * sinP)
 
-                if count > 0 {
-                    let r = CGFloat(rSum / count) / 255.0
-                    let g = CGFloat(gSum / count) / 255.0
-                    let b = CGFloat(bSum / count) / 255.0
-
-                    let fillRect = CGRect(x: blockX, y: blockY, width: bw, height: bh)
-                    ctx.setFillColor(CGColor(red: r, green: g, blue: b, alpha: 1))
-                    ctx.fill([fillRect])
-                }
-
-                blockX += blockSize
-            }
-            blockY += blockSize
-        }
+        ctx.beginPath()
+        ctx.move(to: p1)
+        ctx.addLine(to: p2)
+        ctx.addLine(to: p3)
+        ctx.addLine(to: p4)
+        ctx.addLine(to: p5)
+        ctx.addLine(to: p6)
+        ctx.addLine(to: p7)
+        ctx.closePath()
+        ctx.fillPath()
     }
 
     // MARK: - Overlay Window Management
