@@ -19,7 +19,9 @@
 >
 > 选区、标注、一键美化 —— 自带圆角、阴影和好看的背景，完成即复制到剪贴板。
 
-<!-- TODO: 录完 v1.1.0 演示 GIF 后替换这里 -->
+<div align="center">
+  <img src="screenshots/hero.gif" width="780" alt="SnapDress 演示 — 截图、标注、美化、复制一气呵成" />
+</div>
 
 ## 为什么做 SnapDress
 

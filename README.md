@@ -19,7 +19,9 @@
 >
 > Capture a region, annotate it, get a polished image with rounded corners, shadows, and a beautiful background — copied to your clipboard instantly.
 
-<!-- TODO: replace with v1.1.0 hero GIF once recorded -->
+<div align="center">
+  <img src="screenshots/hero.gif" width="780" alt="SnapDress in action — capture, annotate, beautify, copy" />
+</div>
 
 ## Why SnapDress
 
